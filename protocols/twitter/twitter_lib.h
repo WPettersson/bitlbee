@@ -33,7 +33,7 @@
 
 /* Status URLs */
 #define TWITTER_STATUS_UPDATE_URL "/statuses/update.json"
-#define TWITTER_STATUS_SHOW_URL "/statuses/show/"
+#define TWITTER_STATUS_SHOW_URL "/statuses/show.json"
 #define TWITTER_STATUS_DESTROY_URL "/statuses/destroy/"
 #define TWITTER_STATUS_RETWEET_URL "/statuses/retweet/"
 
@@ -80,18 +80,29 @@
 
 #define TWITTER_USER_STREAM_URL "https://userstream.twitter.com/1.1/user.json"
 
+
+struct twitter_conversation {
+	int replies;
+	struct im_connection *ic;
+	struct twitter_xml_list *txl;
+};
+
+
 gboolean twitter_open_stream(struct im_connection *ic);
 gboolean twitter_get_timeline(struct im_connection *ic, gint64 next_cursor);
 void twitter_get_friends_ids(struct im_connection *ic, gint64 next_cursor);
 void twitter_get_statuses_friends(struct im_connection *ic, gint64 next_cursor);
 
 void twitter_post_status(struct im_connection *ic, char *msg, guint64 in_reply_to);
+void twitter_get_conversation(struct im_connection *ic, guint64 in_reply_to,
+    struct twitter_conversation *conv);
 void twitter_direct_messages_new(struct im_connection *ic, char *who, char *message);
 void twitter_friendships_create_destroy(struct im_connection *ic, char *who, int create);
 void twitter_status_destroy(struct im_connection *ic, guint64 id);
 void twitter_status_retweet(struct im_connection *ic, guint64 id);
 void twitter_report_spam(struct im_connection *ic, char *screen_name);
 void twitter_favourite_tweet(struct im_connection *ic, guint64 id);
+void twitter_view_tweet_thread(struct im_connection *ic, guint64 id);
 
 #endif //_TWITTER_LIB_H
 

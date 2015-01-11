@@ -1083,6 +1083,17 @@
 
 	</bitlbee-setting>
 
+	<bitlbee-setting name="conversation_max_tweets" type="integer" scope="account">
+		<default>5</default>
+
+		<description>
+			<para>
+				This setting controls how many tweets will be retrieved when a conversation is requested.
+			</para>
+		</description>
+
+	</bitlbee-setting>
+
 	<bitlbee-setting name="mobile_is_away" type="boolean" scope="global">
 		<default>false</default>
 

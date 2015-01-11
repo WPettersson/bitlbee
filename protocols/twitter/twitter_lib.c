@@ -609,44 +609,49 @@ static char *twitter_msg_add_id(struct im_connection *ic,
 {
 	struct twitter_data *td = ic->proto_data;
 	int reply_to = -1;
+	int log_id = -1;
 	bee_user_t *bu;
-
-	if (txs->reply_to) {
-		int i;
-		for (i = 0; i < TWITTER_LOG_LENGTH; i++)
-			if (td->log[i].id == txs->reply_to) {
-				reply_to = i;
-				break;
+	// First search through the log to see if we've seen this tweet before, and
+	// also to see if it's a reply to a tweet we know about.
+	int i;
+	for (i = 0; i < TWITTER_LOG_LENGTH; i++) {
+		if (txs->reply_to && td->log[i].id == txs->reply_to)
+			reply_to = i;
+		if (td->log[i].id == txs->id)
+			log_id = i;
+	}
+	// If we haven't seen this tweet in the log, we need to add it.
+	if (log_id == -1) {
+		if (txs->user && txs->user->screen_name &&
+			(bu = bee_user_by_handle(ic->bee, ic, txs->user->screen_name))) {
+			struct twitter_user_data *tud = bu->data;
+			if (txs->id > tud->last_id) {
+				tud->last_id = txs->id;
+				tud->last_time = txs->created_at;
 			}
-	}
-
-	if (txs->user && txs->user->screen_name &&
-	    (bu = bee_user_by_handle(ic->bee, ic, txs->user->screen_name))) {
-		struct twitter_user_data *tud = bu->data;
-
-		if (txs->id > tud->last_id) {
-			tud->last_id = txs->id;
-			tud->last_time = txs->created_at;
 		}
+		td->log_id = (td->log_id + 1) % TWITTER_LOG_LENGTH;
+		td->log[td->log_id].id = txs->id;
+		td->log[td->log_id].bu = bee_user_by_handle(ic->bee, ic, txs->user->screen_name);
+
+		/* This is all getting hairy. :-( If we RT'ed something ourselves,
+		remember OUR id instead so undo will work. In other cases, the
+		original tweet's id should be remembered for deduplicating. */
+		if (g_strcasecmp(txs->user->screen_name, td->user) == 0)
+			td->log[td->log_id].id = txs->rt_id;
+
+		// Keep a track of the log_id for printing purposes below.
+		log_id = td->log_id;
 	}
 	
-	td->log_id = (td->log_id + 1) % TWITTER_LOG_LENGTH;
-	td->log[td->log_id].id = txs->id;
-	td->log[td->log_id].bu = bee_user_by_handle(ic->bee, ic, txs->user->screen_name);
-	
-	/* This is all getting hairy. :-( If we RT'ed something ourselves,
-	   remember OUR id instead so undo will work. In other cases, the
-	   original tweet's id should be remembered for deduplicating. */
-	if (g_strcasecmp(txs->user->screen_name, td->user) == 0)
-		td->log[td->log_id].id = txs->rt_id;
 	
 	if (set_getbool(&ic->acc->set, "show_ids")) {
 		if (reply_to != -1)
 			return g_strdup_printf("\002[\002%02x->%02x\002]\002 %s%s",
-			                       td->log_id, reply_to, prefix, txs->text);
+			                       log_id, reply_to, prefix, txs->text);
 		else
 			return g_strdup_printf("\002[\002%02x\002]\002 %s%s",
-			                       td->log_id, prefix, txs->text);
+			                       log_id, prefix, txs->text);
 	} else {
 		if (*prefix)
 			return g_strconcat(prefix, txs->text, NULL);
@@ -682,6 +687,35 @@ static void twitter_status_show_chat(struct im_connection *ic, struct twitter_xm
 	}
 
 	g_free(msg);
+}
+
+/**
+ * Function that is called to see a conversation as a private messages.
+ */
+static void twitter_status_show_conversation(struct im_connection *ic, struct
+		twitter_xml_list *conversation)
+{
+	struct twitter_xml_status *status;
+	struct twitter_data *td = ic->proto_data;
+	char from[MAX_STRING] = "";
+	char *prefix = NULL, *text = NULL;
+	GSList *l;
+
+	g_snprintf(from, sizeof(from) - 1, "%s_%s", td->prefix, ic->acc->user);
+	from[MAX_STRING - 1] = '\0';
+
+	for (l = conversation->list; l; l = g_slist_next(l)) {
+		status = l->data;
+		prefix = g_strdup_printf("\002<\002%s\002>\002 ",
+		                         status->user->screen_name);
+		text = twitter_msg_add_id(ic, status, prefix ? prefix : "");
+
+		imcb_buddy_msg(ic,
+					*from ? from : status->user->screen_name,
+					text ? text : status->text, 0, status->created_at);
+	}
+	g_free(text);
+	g_free(prefix);
 }
 
 /**
@@ -1134,6 +1168,50 @@ static void twitter_http_get_mentions(struct http_request *req)
 }
 
 /**
+ * Callback for getting tweets for a conversation thread.
+ */
+static void twitter_http_get_conversation(struct http_request *req)
+{
+	struct twitter_conversation *conv = req->data;
+	struct im_connection *ic = conv->ic;
+	int conversation_max = set_getint(&ic->acc->set, "conversation_max_tweets");
+	json_value *parsed;
+	struct twitter_xml_list *txl = conv->txl;
+	struct twitter_xml_status *now;
+
+	// Check if the connection is still active.
+	if (!g_slist_find(twitter_connections, ic))
+		return;
+
+	now = g_new0(struct twitter_xml_status, 1);
+	now->reply_to = 0;
+
+	// Should just return one status
+	if (!(parsed = twitter_parse_response(ic, req)))
+		goto end;
+	now = twitter_xt_get_status(parsed);
+	json_value_free(parsed);
+
+	// Store the next tweet at the end of the list
+	txl->list = g_slist_prepend(txl->list, now);
+	// Print the tweets if there are no more tweets in the conversation
+	if ( now->reply_to == 0 || conv->replies == conversation_max_tweets) {
+		twitter_status_show_conversation(ic, txl);
+		txl_free(txl);
+		g_free(conv);
+	} else {
+		// Keep getting more tweets
+		conv->replies++;
+		twitter_get_conversation(ic, now->reply_to, conv);
+	}
+
+      end:
+	if (!g_slist_find(twitter_connections, ic))
+		return;
+	twitter_flush_timeline(ic);
+}
+
+/**
  * Callback to use after sending a POST request to twitter.
  * (Generic, used for a few kinds of queries.)
  */
@@ -1178,6 +1256,27 @@ void twitter_post_status(struct im_connection *ic, char *msg, guint64 in_reply_t
 	g_free(args[3]);
 }
 
+/**
+ * Function to get a conversation from twitter.
+ */
+void twitter_get_conversation(struct im_connection *ic, guint64 tweet_id,
+		struct twitter_conversation *conv)
+{
+	char *args[2] = {
+		"id", g_strdup_printf("%llu", (unsigned long long) tweet_id)
+	};
+
+	if (conv == NULL) {
+		conv = g_new0(struct twitter_conversation, 1);
+		conv->replies = 0;
+		conv->ic = ic;
+		conv->txl = g_new0(struct twitter_xml_list, 1);
+	}
+
+	twitter_http(ic, TWITTER_STATUS_SHOW_URL, twitter_http_get_conversation,
+			conv, 0, args, 2);
+	g_free(args[1]);
+}
 
 /**
  * Function to POST a new message to twitter.
@@ -1250,3 +1349,5 @@ void twitter_favourite_tweet(struct im_connection *ic, guint64 id)
 	               ic, 1, args, 2, TWITTER_HTTP_USER_ACK);
 	g_free(args[1]);
 }
+
+// vim: sw=4:ts=4:noexpandtab

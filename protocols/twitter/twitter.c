@@ -328,6 +328,8 @@ static void twitter_init(account_t * acc)
 
 	s = set_add(&acc->set, "show_old_mentions", "0", set_eval_int, acc);
 
+	s = set_add(&acc->set, "conversation_max_tweets", "5", set_eval_int, acc);
+
 	s = set_add(&acc->set, "strip_newlines", "false", set_eval_bool, acc);
 	
 	s = set_add(&acc->set, "_last_tweet", "0", NULL, acc);
@@ -658,6 +660,15 @@ static void twitter_handle_command(struct im_connection *ic, char *message)
 		td->last_status_id = 0;
 		if (id)
 			twitter_status_retweet(ic, id);
+		else
+			twitter_log(ic, "User `%s' does not exist or didn't "
+				    "post any statuses recently", cmd[1]);
+
+		goto eof;
+	} else if (g_strcasecmp(cmd[0], "thread") == 0 && cmd[1]) {
+		id = twitter_message_id_from_command_arg(ic, cmd[1], NULL);
+		if (id)
+			twitter_get_conversation(ic, id, NULL);
 		else
 			twitter_log(ic, "User `%s' does not exist or didn't "
 				    "post any statuses recently", cmd[1]);
