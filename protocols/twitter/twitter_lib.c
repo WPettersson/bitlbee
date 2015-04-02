@@ -984,6 +984,18 @@ static gboolean twitter_stream_handle_event(struct im_connection *ic, json_value
 		txu_free(us);
 		txu_free(ut);
 	}
+	if (strcmp(type, "favorite") == 0) {
+		struct twitter_xml_user *us = twitter_xt_get_user(source);
+		struct twitter_xml_user *ut = twitter_xt_get_user(target);
+		if (g_strcasecmp(ut->screen_name, td->user) == 0) {
+			json_value *obj = json_o_str(o,"target_object");
+			struct twitter_xml_status *txs = twitter_xt_get_status(obj);
+			// We've been favorited, announce it?
+			txs_free(txs);
+		}
+		txu_free(us);
+		txu_free(ut);
+	}
 
 	return TRUE;
 }
